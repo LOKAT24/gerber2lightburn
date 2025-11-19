@@ -500,17 +500,20 @@ const RenderLayer = ({ layerData, boardBounds }) => {
     const content = (
       <g>
         {/* Render regions first */}
-        {data.paths
-          .filter((p) => p.type === "region")
-          .map((p, i) => (
+        {(() => {
+          const regionD = data.paths
+            .filter((p) => p.type === "region")
+            .map((p) => p.d)
+            .join(" ");
+          return regionD ? (
             <path
-              key={`region-${i}`}
-              d={p.d}
+              d={regionD}
               fill="currentColor"
               stroke="none"
-              fillRule="nonzero"
+              fillRule="evenodd"
             />
-          ))}
+          ) : null;
+        })()}
 
         {/* Render flashes */}
         {data.paths
