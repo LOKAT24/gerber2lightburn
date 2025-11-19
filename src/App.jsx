@@ -552,30 +552,87 @@ export default function App() {
 
   const guessLayerStyle = (filename) => {
     const lower = filename.toLowerCase();
+
+    // 1. Drills (White)
     if (
       lower.includes(".drl") ||
       lower.includes(".xln") ||
       lower.includes("drill") ||
       lower.includes(".drd")
     ) {
-      return { color: "#ecf0f1", opacity: 0.9, order: 100 };
+      return { color: "#ffffff", opacity: 0.9, order: 100 };
     }
-    if (lower.includes("f.cu") || lower.includes("gtl"))
-      return { color: "#c0392b", order: 1 };
-    if (lower.includes("b.cu") || lower.includes("gbl"))
-      return { color: "#2980b9", order: 2 };
-    if (lower.includes("f.silk") || lower.includes("gto"))
-      return { color: "#ecf0f1", order: 0 };
-    if (lower.includes("b.silk") || lower.includes("gbo"))
-      return { color: "#bdc3c7", order: 3 };
+
+    // 2. Profile / Outline (Orange)
+    if (
+      lower.includes("profile") ||
+      lower.includes("outline") ||
+      lower.includes("edge") ||
+      lower.includes("gm1") ||
+      lower.includes("gko")
+    ) {
+      return { color: "#e67e22", order: 90 };
+    }
+
+    // 3. Paste (Gold/Yellow)
+    if (
+      lower.includes("paste") ||
+      lower.includes("gtp") ||
+      lower.includes("gbp") ||
+      lower.includes("stencil")
+    ) {
+      return { color: "#f1c40f", opacity: 0.8, order: 60 };
+    }
+
+    // 4. Soldermask (Green)
     if (
       lower.includes("mask") ||
       lower.includes("gts") ||
       lower.includes("gbs")
-    )
-      return { color: "#27ae60", opacity: 0.5, order: 4 };
+    ) {
+      return { color: "#27ae60", opacity: 0.5, order: 50 };
+    }
 
-    return { color: "#f1c40f", order: 10 };
+    // 5. Silkscreen (White/Gray)
+    if (
+      lower.includes("silk") ||
+      lower.includes("gto") ||
+      lower.includes("gbo") ||
+      lower.includes("legend")
+    ) {
+      // Bottom Silk slightly darker
+      if (
+        lower.includes("bottom") ||
+        lower.includes("b.") ||
+        lower.includes("back") ||
+        lower.includes("gbo")
+      ) {
+        return { color: "#bdc3c7", order: 80 };
+      }
+      return { color: "#ecf0f1", order: 80 };
+    }
+
+    // 6. Copper (Red/Blue)
+    if (
+      lower.includes("top") ||
+      lower.includes("f.cu") ||
+      lower.includes("gtl") ||
+      lower.includes("front")
+    ) {
+      return { color: "#c0392b", opacity: 0.9, order: 10 };
+    }
+
+    if (
+      lower.includes("bottom") ||
+      lower.includes("b.cu") ||
+      lower.includes("gbl") ||
+      lower.includes("back")
+    ) {
+      return { color: "#2980b9", opacity: 0.9, order: 10 };
+    }
+
+    // Default fallback
+    return { color: "#95a5a6", order: 5 };
   };
 
   const handleFiles = async (files) => {
