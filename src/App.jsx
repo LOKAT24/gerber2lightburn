@@ -885,7 +885,7 @@ export default function App() {
         const style = guessLayerStyle(file.name);
 
         newLayers.push({
-          id: Math.random().toString(36).substr(2, 9),
+          id: crypto.randomUUID(),
           name: file.name,
           visible: true,
           color: style.color,
@@ -964,6 +964,14 @@ export default function App() {
     const clone = ref.current.cloneNode(true);
     const grid = clone.querySelector("#grid-background");
     if (grid) grid.remove();
+
+    // Fix for units: explicitly set width and height in mm based on viewBox
+    const viewBoxAttr = clone.getAttribute("viewBox");
+    if (viewBoxAttr) {
+      const [, , w, h] = viewBoxAttr.split(" ").map(parseFloat);
+      clone.setAttribute("width", `${w}mm`);
+      clone.setAttribute("height", `${h}mm`);
+    }
 
     const svgData = new XMLSerializer().serializeToString(clone);
     const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
