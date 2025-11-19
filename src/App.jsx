@@ -438,11 +438,115 @@ const RenderLayer = ({ layerData }) => {
   }, [layerData.color, layerData.opacity, layerData.data]);
 };
 
+const getLayerSide = (name) => {
+  const lower = name.toLowerCase();
+
+  // Specific extensions for Top
+  if (
+    lower.endsWith(".gtl") ||
+    lower.endsWith(".gto") ||
+    lower.endsWith(".gts") ||
+    lower.endsWith(".gtp") ||
+    lower.includes("f.cu") ||
+    lower.includes("f.silk") ||
+    lower.includes("f.mask") ||
+    lower.includes("f.paste")
+  ) {
+    return "top";
+  }
+
+  // Specific extensions for Bottom
+  if (
+    lower.endsWith(".gbl") ||
+    lower.endsWith(".gbo") ||
+    lower.endsWith(".gbs") ||
+    lower.endsWith(".gbp") ||
+    lower.includes("b.cu") ||
+    lower.includes("b.silk") ||
+    lower.includes("b.mask") ||
+    lower.includes("b.paste")
+  ) {
+    return "bottom";
+  }
+
+  // Keywords
+  const isTop = lower.includes("top") || lower.includes("front");
+
+  const isBottom = lower.includes("bottom") || lower.includes("back");
+
+  if (isTop && !isBottom) return "top";
+  if (isBottom && !isTop) return "bottom";
+
+  return "both";
+};
+
+const GerberView = ({
+  layers,
+  viewBox,
+  svgRef,
+  onWheel,
+  onMouseDown,
+  onMouseMove,
+  onMouseUp,
+  onMouseLeave,
+  title,
+}) => {
+  return (
+    <div className="flex-1 relative border-r border-slate-800 last:border-r-0">
+      <div className="absolute top-2 left-2 text-xs font-bold text-slate-500 pointer-events-none z-10 bg-slate-900/50 px-2 rounded">
+        {title}
+      </div>
+      <svg
+        ref={svgRef}
+        className="w-full h-full cursor-crosshair touch-none"
+        viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
+        preserveAspectRatio="xMidYMid meet"
+        onWheel={onWheel}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={onMouseLeave}
+      >
+        <defs>
+          <pattern
+            id="grid"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d="M 10 0 L 0 0 0 10"
+              fill="none"
+              stroke="#1e293b"
+              strokeWidth="0.1"
+            />
+          </pattern>
+        </defs>
+        <rect
+          x={viewBox.x - 1000}
+          y={viewBox.y - 1000}
+          width={viewBox.w + 2000}
+          height={viewBox.h + 2000}
+          fill="url(#grid)"
+        />
+
+        <g transform="scale(1, -1)">
+          {layers.map(
+            (layer) =>
+              layer.visible && <RenderLayer key={layer.id} layerData={layer} />
+          )}
+        </g>
+      </svg>
+    </div>
+  );
+};
+
 export default function App() {
   const [layers, setLayers] = useState([]);
   const [dragActive, setDragActive] = useState(false);
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 100, h: 100 });
-  const svgRef = useRef(null);
+  const svgTopRef = useRef(null);
+  const svgBottomRef = useRef(null);
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
 
@@ -564,12 +668,12 @@ export default function App() {
     setStartPan({ x: e.clientX, y: e.clientY });
   };
 
-  const handleMouseMove = (e) => {
+  const handleMouseMove = (e, ref) => {
     if (!isPanning) return;
     const dx = e.clientX - startPan.x;
     const dy = e.clientY - startPan.y;
 
-    const svgEl = svgRef.current;
+    const svgEl = ref?.current;
     if (svgEl) {
       const { width, height } = svgEl.getBoundingClientRect();
       const scaleX = viewBox.w / width;
@@ -694,7 +798,7 @@ export default function App() {
 
         {/* SVG AREA */}
         <div
-          className={`flex-1 bg-slate-950 relative overflow-hidden ${
+          className={`flex-1 bg-slate-950 relative overflow-hidden flex flex-row ${
             dragActive ? "bg-slate-900/50" : ""
           }`}
           onDragEnter={(e) => {
@@ -725,49 +829,35 @@ export default function App() {
             </div>
           )}
 
-          <svg
-            ref={svgRef}
-            className="w-full h-full cursor-crosshair touch-none"
-            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-            preserveAspectRatio="xMidYMid meet"
+          <GerberView
+            title="TOP"
+            layers={layers.filter((l) => {
+              const side = getLayerSide(l.name);
+              return side === "top" || side === "both";
+            })}
+            viewBox={viewBox}
+            svgRef={svgTopRef}
             onWheel={handleWheel}
             onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
+            onMouseMove={(e) => handleMouseMove(e, svgTopRef)}
             onMouseUp={() => setIsPanning(false)}
             onMouseLeave={() => setIsPanning(false)}
-          >
-            <defs>
-              <pattern
-                id="grid"
-                width="10"
-                height="10"
-                patternUnits="userSpaceOnUse"
-              >
-                <path
-                  d="M 10 0 L 0 0 0 10"
-                  fill="none"
-                  stroke="#1e293b"
-                  strokeWidth="0.1"
-                />
-              </pattern>
-            </defs>
-            <rect
-              x={viewBox.x - 1000}
-              y={viewBox.y - 1000}
-              width={viewBox.w + 2000}
-              height={viewBox.h + 2000}
-              fill="url(#grid)"
-            />
+          />
 
-            <g transform="scale(1, -1)">
-              {layers.map(
-                (layer) =>
-                  layer.visible && (
-                    <RenderLayer key={layer.id} layerData={layer} />
-                  )
-              )}
-            </g>
-          </svg>
+          <GerberView
+            title="BOTTOM"
+            layers={layers.filter((l) => {
+              const side = getLayerSide(l.name);
+              return side === "bottom" || side === "both";
+            })}
+            viewBox={viewBox}
+            svgRef={svgBottomRef}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={(e) => handleMouseMove(e, svgBottomRef)}
+            onMouseUp={() => setIsPanning(false)}
+            onMouseLeave={() => setIsPanning(false)}
+          />
         </div>
 
         {/* FOOTER INFO */}
