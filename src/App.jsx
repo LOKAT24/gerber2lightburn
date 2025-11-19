@@ -10,6 +10,7 @@ import {
   Trash2,
   Info,
   Download,
+  Maximize,
 } from "lucide-react";
 
 /**
@@ -904,37 +905,9 @@ export default function App() {
       );
 
       // Calculate bounds for ALL layers to fit everything
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      let hasContent = false;
-
-      combined.forEach((layer) => {
-        if (layer.data && layer.data.bounds) {
-          const b = layer.data.bounds;
-          // Skip invalid bounds
-          if (b.minX === Infinity || b.maxX === -Infinity) return;
-
-          if (b.minX < minX) minX = b.minX;
-          if (b.minY < minY) minY = b.minY;
-          if (b.maxX > maxX) maxX = b.maxX;
-          if (b.maxY > maxY) maxY = b.maxY;
-          hasContent = true;
-        }
-      });
-
-      if (hasContent) {
-        const width = maxX - minX;
-        const height = maxY - minY;
-        const pad = Math.max(width, height) * 0.1; // 10% padding
-
-        setViewBox({
-          x: minX - pad,
-          y: minY - pad,
-          w: width + pad * 2,
-          h: height + pad * 2,
-        });
+      const box = getFitViewBox(combined);
+      if (box) {
+        setViewBox(box);
       }
 
       return combined;
@@ -1001,6 +974,46 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const getFitViewBox = (layersList) => {
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    let hasContent = false;
+
+    layersList.forEach((layer) => {
+      if (layer.visible && layer.data && layer.data.bounds) {
+        const b = layer.data.bounds;
+        if (b.minX === Infinity || b.maxX === -Infinity) return;
+
+        if (b.minX < minX) minX = b.minX;
+        if (b.minY < minY) minY = b.minY;
+        if (b.maxX > maxX) maxX = b.maxX;
+        if (b.maxY > maxY) maxY = b.maxY;
+        hasContent = true;
+      }
+    });
+
+    if (hasContent) {
+      const width = maxX - minX;
+      const height = maxY - minY;
+      const pad = Math.max(width, height) * 0.1;
+
+      return {
+        x: minX - pad,
+        y: -maxY - pad, // Corrected for scale(1, -1)
+        w: width + pad * 2,
+        h: height + pad * 2,
+      };
+    }
+    return null;
+  };
+
+  const fitToScreen = () => {
+    const box = getFitViewBox(layers);
+    if (box) setViewBox(box);
   };
 
   return (
@@ -1079,7 +1092,7 @@ export default function App() {
       {/* MAIN CANVAS */}
       <div className="flex-1 relative flex flex-col h-full">
         {/* TOOLBAR */}
-        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-slate-800/90 backdrop-blur-sm p-2 rounded-full shadow-lg flex items-center gap-2 border border-slate-700 z-20">
+        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-slate-800/90 backdrop-blur-sm p-2 rounded-full shadow-lg flex items-center gap-2 border border-slate-700 z-20">
           <button
             className="p-2 hover:bg-slate-700 rounded-full text-slate-300"
             onClick={() =>
@@ -1097,6 +1110,13 @@ export default function App() {
             title="Oddal"
           >
             <ZoomOut size={20} />
+          </button>
+          <button
+            className="p-2 hover:bg-slate-700 rounded-full text-slate-300"
+            onClick={fitToScreen}
+            title="Dopasuj do ekranu"
+          >
+            <Maximize size={20} />
           </button>
           <div className="w-px h-4 bg-slate-600 mx-1" />
           <button
