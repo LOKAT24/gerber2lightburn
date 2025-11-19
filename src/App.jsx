@@ -262,7 +262,7 @@ class SimpleGerberParser {
       }
 
       if (line.startsWith("%AD")) {
-        const match = line.match(/ADD(\d+)\s*([a-zA-Z0-9_]+)[, ]?([0-9.X]+)?/);
+        const match = line.match(/ADD(\d+)\s*([a-zA-Z0-9_]+)[, ]?([0-9.X-]+)?/);
         if (match) {
           const code = match[1];
           const type = match[2];
@@ -717,60 +717,211 @@ const RenderLayer = ({ layerData, boardBounds }) => {
               // Check for Macros
               const macro = data.macros?.[type];
               if (macro) {
+                const maskId = `mask-${i}-${p.x}-${p.y}`;
+
+                // We need to parse all primitives first to calculate bounds and render them in the mask
+                let minX = 0,
+                  minY = 0,
+                  maxX = 0,
+                  maxY = 0;
+                let first = true;
+
+                const expand = (x, y, r = 0) => {
+                  if (first) {
+                    minX = x - r;
+                    minY = y - r;
+                    maxX = x + r;
+                    maxY = y + r;
+                    first = false;
+                  } else {
+                    minX = Math.min(minX, x - r);
+                    minY = Math.min(minY, y - r);
+                    maxX = Math.max(maxX, x + r);
+                    maxY = Math.max(maxY, y + r);
+                  }
+                };
+
+                const primitives = macro.map((block, idx) => {
+                  const rawParts = block.replace(/\*$/, "").split(",");
+
+                  // Helper to resolve value
+                  const val = (v) => {
+                    if (!v) return 0;
+                    let expr = v.toString();
+                    if (!expr.includes("$") && !isNaN(parseFloat(expr)))
+                      return parseFloat(expr);
+                    expr = expr.replace(/\$(\d+)/g, (m, n) => {
+                      const val = params[parseInt(n) - 1];
+                      return val !== undefined ? val : 0;
+                    });
+                    try {
+                      return new Function("return " + expr)();
+                    } catch {
+                      return 0;
+                    }
+                  };
+
+                  const primType = parseInt(rawParts[0], 10);
+                  let el = null;
+
+                  // 1: Circle
+                  if (primType === 1) {
+                    const exposure = val(rawParts[1]);
+                    const diam = val(rawParts[2]);
+                    const cx = val(rawParts[3]);
+                    const cy = val(rawParts[4]);
+                    expand(cx, cy, diam / 2);
+                    el = (
+                      <circle
+                        cx={cx}
+                        cy={cy}
+                        r={diam / 2}
+                        fill={exposure === 1 ? "white" : "black"}
+                      />
+                    );
+                  }
+                  // 20: Vector Line
+                  else if (primType === 20) {
+                    const exposure = val(rawParts[1]);
+                    const width = val(rawParts[2]);
+                    const sx = val(rawParts[3]);
+                    const sy = val(rawParts[4]);
+                    const ex = val(rawParts[5]);
+                    const ey = val(rawParts[6]);
+                    const rot = val(rawParts[7]);
+                    expand(sx, sy, width / 2);
+                    expand(ex, ey, width / 2);
+                    el = (
+                      <line
+                        x1={sx}
+                        y1={sy}
+                        x2={ex}
+                        y2={ey}
+                        stroke={exposure === 1 ? "white" : "black"}
+                        strokeWidth={width}
+                        strokeLinecap="round"
+                        transform={`rotate(${rot})`}
+                      />
+                    );
+                  }
+                  // 21: Center Rect
+                  else if (primType === 21) {
+                    const exposure = val(rawParts[1]);
+                    const w = val(rawParts[2]);
+                    const h = val(rawParts[3]);
+                    const cx = val(rawParts[4]);
+                    const cy = val(rawParts[5]);
+                    const rot = val(rawParts[6]);
+                    const r = Math.sqrt(w * w + h * h) / 2;
+                    expand(cx, cy, r);
+                    el = (
+                      <rect
+                        x={cx - w / 2}
+                        y={cy - h / 2}
+                        width={w}
+                        height={h}
+                        transform={`rotate(${rot}, ${cx}, ${cy})`}
+                        fill={exposure === 1 ? "white" : "black"}
+                      />
+                    );
+                  }
+                  // 4: Outline
+                  else if (primType === 4) {
+                    const exposure = val(rawParts[1]);
+                    const count = val(rawParts[2]);
+                    const pts = [];
+                    for (let k = 0; k < count; k++) {
+                      const x = val(rawParts[3 + k * 2]);
+                      const y = val(rawParts[4 + k * 2]);
+                      pts.push(`${x},${y}`);
+                      expand(x, y);
+                    }
+                    const rot = val(rawParts[rawParts.length - 1]);
+                    el = (
+                      <polygon
+                        points={pts.join(" ")}
+                        transform={`rotate(${rot})`}
+                        fill={exposure === 1 ? "white" : "black"}
+                      />
+                    );
+                  }
+                  // 5: Polygon
+                  else if (primType === 5) {
+                    const exposure = val(rawParts[1]);
+                    const vertices = val(rawParts[2]);
+                    const cx = val(rawParts[3]);
+                    const cy = val(rawParts[4]);
+                    const diam = val(rawParts[5]);
+                    const rot = val(rawParts[6]);
+                    expand(cx, cy, diam / 2);
+                    const r = diam / 2;
+                    const pts = [];
+                    for (let v = 0; v < vertices; v++) {
+                      const angle = (v * 2 * Math.PI) / vertices;
+                      pts.push(
+                        `${cx + r * Math.cos(angle)},${
+                          cy + r * Math.sin(angle)
+                        }`
+                      );
+                    }
+                    el = (
+                      <polygon
+                        points={pts.join(" ")}
+                        transform={`rotate(${rot}, ${cx}, ${cy})`}
+                        fill={exposure === 1 ? "white" : "black"}
+                      />
+                    );
+                  }
+                  // 7: Thermal
+                  else if (primType === 7) {
+                    const cx = val(rawParts[1]);
+                    const cy = val(rawParts[2]);
+                    const outer = val(rawParts[3]);
+                    const inner = val(rawParts[4]);
+                    expand(cx, cy, outer / 2);
+                    el = (
+                      <g>
+                        <circle cx={cx} cy={cy} r={outer / 2} fill="white" />
+                        <circle cx={cx} cy={cy} r={inner / 2} fill="black" />
+                      </g>
+                    );
+                  }
+
+                  return { el, idx };
+                });
+
+                // Add some padding to bounds
+                minX -= 0.1;
+                minY -= 0.1;
+                maxX += 0.1;
+                maxY += 0.1;
+                const width = maxX - minX;
+                const height = maxY - minY;
+
                 return (
                   <g key={`flash-${i}`} transform={`translate(${p.x}, ${p.y})`}>
-                    {macro.map((block, idx) => {
-                      const parts = block.split(",").map(parseFloat);
-                      const primType = parts[0];
-                      // 1: Circle, 20: Vector Line, 21: Center Rect, 4: Outline
-                      if (primType === 1) {
-                        // 1, exp, diam, x, y
-                        return (
-                          <circle
-                            key={idx}
-                            cx={parts[3]}
-                            cy={parts[4]}
-                            r={parts[2] / 2}
-                            fill="currentColor"
-                          />
-                        );
-                      }
-                      if (primType === 21) {
-                        // 21, exp, w, h, x, y, rot
-                        const w = parts[2];
-                        const h = parts[3];
-                        const x = parts[4];
-                        const y = parts[5];
-                        const rot = parts[6];
-                        return (
-                          <rect
-                            key={idx}
-                            x={x - w / 2}
-                            y={y - h / 2}
-                            width={w}
-                            height={h}
-                            transform={`rotate(${rot}, ${x}, ${y})`}
-                            fill="currentColor"
-                          />
-                        );
-                      }
-                      if (primType === 4) {
-                        // 4, exp, count, x1, y1, ...
-                        const count = parts[2];
-                        const pts = [];
-                        for (let k = 0; k < count; k++) {
-                          pts.push(`${parts[3 + k * 2]},${parts[4 + k * 2]}`);
-                        }
-                        return (
-                          <polygon
-                            key={idx}
-                            points={pts.join(" ")}
-                            fill="currentColor"
-                          />
-                        );
-                      }
-                      return null;
-                    })}
+                    <defs>
+                      <mask id={maskId}>
+                        <rect
+                          x={minX}
+                          y={minY}
+                          width={width}
+                          height={height}
+                          fill="black"
+                        />
+                        {primitives.map((p) => (
+                          <React.Fragment key={p.idx}>{p.el}</React.Fragment>
+                        ))}
+                      </mask>
+                    </defs>
+                    <rect
+                      x={minX}
+                      y={minY}
+                      width={width}
+                      height={height}
+                      fill="currentColor"
+                      mask={`url(#${maskId})`}
+                    />
                   </g>
                 );
               }
