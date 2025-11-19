@@ -9,6 +9,7 @@ import {
   Move,
   Trash2,
   Info,
+  Download,
 } from "lucide-react";
 
 /**
@@ -123,6 +124,8 @@ class SimpleGerberParser {
     this.format = {
       coordFormat: { dec: 4 },
     };
+    this.isRegion = false;
+    this.regionPath = "";
   }
 
   toMM(val) {
@@ -158,6 +161,8 @@ class SimpleGerberParser {
     this.apertures = {};
     this.x = 0;
     this.y = 0;
+    this.isRegion = false;
+    this.regionPath = "";
     let currentPath = "";
 
     const flushPath = () => {
@@ -177,6 +182,21 @@ class SimpleGerberParser {
 
       if (line.startsWith("%MOIN")) this.units = "in";
       if (line.startsWith("%MOMM")) this.units = "mm";
+
+      if (line === "G36") {
+        flushPath();
+        this.isRegion = true;
+        this.regionPath = "";
+        continue;
+      }
+      if (line === "G37") {
+        this.isRegion = false;
+        if (this.regionPath) {
+          this.paths.push({ d: this.regionPath + " Z", type: "region" });
+          this.regionPath = "";
+        }
+        continue;
+      }
 
       if (line.startsWith("%AD")) {
         const match = line.match(/ADD(\d+)\s*([a-zA-Z0-9_]+)[, ]?([0-9.X]+)?/);
@@ -213,23 +233,34 @@ class SimpleGerberParser {
 
         if (dMatch) {
           const op = dMatch[1];
-          if (op === "02") {
-            flushPath();
-            currentPath = `M ${newX} ${newY}`;
-          } else if (op === "01") {
-            if (!currentPath) currentPath = `M ${this.x} ${this.y}`;
-            currentPath += ` L ${newX} ${newY}`;
-          } else if (op === "03") {
-            flushPath();
-            this.paths.push({
-              x: newX,
-              y: newY,
-              aperture: this.currentAperture,
-              type: "flash",
-            });
+          if (this.isRegion) {
+            if (op === "01" || op === "02") {
+              const cmd = op === "02" ? "M" : "L";
+              this.regionPath += ` ${cmd} ${newX} ${newY}`;
+            }
+          } else {
+            if (op === "02") {
+              flushPath();
+              currentPath = `M ${newX} ${newY}`;
+            } else if (op === "01") {
+              if (!currentPath) currentPath = `M ${this.x} ${this.y}`;
+              currentPath += ` L ${newX} ${newY}`;
+            } else if (op === "03") {
+              flushPath();
+              this.paths.push({
+                x: newX,
+                y: newY,
+                aperture: this.currentAperture,
+                type: "flash",
+              });
+            }
           }
         } else {
-          if (currentPath) currentPath += ` L ${newX} ${newY}`;
+          if (this.isRegion) {
+            this.regionPath += ` L ${newX} ${newY}`;
+          } else {
+            if (currentPath) currentPath += ` L ${newX} ${newY}`;
+          }
         }
         this.x = newX;
         this.y = newY;
@@ -248,6 +279,7 @@ const LayerItem = ({
   onDelete,
   onColorChange,
   onChangeOpacity,
+  onToggleInvert,
 }) => {
   return (
     <div className="flex flex-col bg-slate-800 rounded-lg mb-2 border border-slate-700 overflow-hidden">
@@ -280,6 +312,16 @@ const LayerItem = ({
         >
           {layer.name}
         </span>
+
+        <button
+          onClick={() => onToggleInvert(layer.id)}
+          className={`p-1.5 rounded hover:bg-slate-700 transition-colors text-[10px] font-bold border border-slate-600 ${
+            layer.inverted ? "bg-blue-600 text-white" : "text-slate-400"
+          }`}
+          title="Negatyw (dla lasera)"
+        >
+          INV
+        </button>
 
         <button
           onClick={() => onDelete(layer.id)}
@@ -335,6 +377,38 @@ const parseFile = async (file) => {
 
   paths.forEach((p) => {
     if (p.type === "trace") {
+      const width = p.aperture?.params?.[0] || 0;
+      const halfWidth = width / 2;
+
+      const coords = p.d.match(/[-+]?[\d.]+/g);
+      if (coords) {
+        for (let i = 0; i < coords.length; i += 2) {
+          const x = parseFloat(coords[i]);
+          const y = parseFloat(coords[i + 1]);
+          if (x - halfWidth < minX) minX = x - halfWidth;
+          if (x + halfWidth > maxX) maxX = x + halfWidth;
+          if (y - halfWidth < minY) minY = y - halfWidth;
+          if (y + halfWidth > maxY) maxY = y + halfWidth;
+        }
+      }
+    } else if (p.type === "flash") {
+      const params = p.aperture?.params || [0];
+      const type = p.aperture?.type || "C";
+      let rx = 0,
+        ry = 0;
+
+      if (type === "C" || type === "P") {
+        rx = ry = (params[0] || 0) / 2;
+      } else if (type === "R" || type === "O") {
+        rx = (params[0] || 0) / 2;
+        ry = (params[1] || params[0] || 0) / 2;
+      }
+
+      if (p.x - rx < minX) minX = p.x - rx;
+      if (p.x + rx > maxX) maxX = p.x + rx;
+      if (p.y - ry < minY) minY = p.y - ry;
+      if (p.y + ry > maxY) maxY = p.y + ry;
+    } else if (p.type === "region") {
       const coords = p.d.match(/[-+]?[\d.]+/g);
       if (coords) {
         for (let i = 0; i < coords.length; i += 2) {
@@ -346,11 +420,6 @@ const parseFile = async (file) => {
           if (y > maxY) maxY = y;
         }
       }
-    } else if (p.type === "flash") {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
     }
   });
 
@@ -369,15 +438,84 @@ const parseFile = async (file) => {
   };
 };
 
-const RenderLayer = ({ layerData }) => {
+const traceToOutlinePath = (d, width) => {
+  const commands = d.trim().split(/\s+/);
+  const points = [];
+  for (let i = 0; i < commands.length; i++) {
+    const cmd = commands[i];
+    if (cmd === "M" || cmd === "L") {
+      const x = parseFloat(commands[i + 1]);
+      const y = parseFloat(commands[i + 2]);
+      points.push({ x, y });
+      i += 2;
+    }
+  }
+
+  if (points.length < 2) return "";
+
+  let path = "";
+  const r = width / 2;
+
+  // Add circles at all points (covers caps and joins)
+  points.forEach((p) => {
+    // Circle path: M cx cy m -r, 0 a r,r 0 1,1 (r*2),0 a r,r 0 1,1 -(r*2),0
+    // Uses sweep-flag 1 (clockwise) to match the winding of the rectangles
+    path += `M ${p.x} ${p.y} m -${r}, 0 a ${r},${r} 0 1,1 ${
+      r * 2
+    },0 a ${r},${r} 0 1,1 -${r * 2},0 `;
+  });
+
+  // Add rects for segments
+  for (let i = 0; i < points.length - 1; i++) {
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) continue;
+
+    const nx = (-dy / len) * r;
+    const ny = (dx / len) * r;
+
+    // 4 corners
+    const c1x = p1.x + nx;
+    const c1y = p1.y + ny;
+    const c2x = p1.x - nx;
+    const c2y = p1.y - ny;
+    const c3x = p2.x - nx;
+    const c3y = p2.y - ny;
+    const c4x = p2.x + nx;
+    const c4y = p2.y + ny;
+
+    path += `M ${c1x} ${c1y} L ${c2x} ${c2y} L ${c3x} ${c3y} L ${c4x} ${c4y} Z `;
+  }
+
+  return path;
+};
+
+const RenderLayer = ({ layerData, boardBounds }) => {
   return useMemo(() => {
-    return (
-      <g
-        className="mix-blend-screen"
-        style={{ opacity: layerData.opacity, color: layerData.color }}
-      >
-        {layerData.data.paths.map((p, i) => {
-          if (p.type === "flash") {
+    const { inverted, color, opacity, data, id } = layerData;
+
+    const content = (
+      <g>
+        {/* Render regions first */}
+        {data.paths
+          .filter((p) => p.type === "region")
+          .map((p, i) => (
+            <path
+              key={`region-${i}`}
+              d={p.d}
+              fill="currentColor"
+              stroke="none"
+              fillRule="nonzero"
+            />
+          ))}
+
+        {/* Render flashes */}
+        {data.paths
+          .filter((p) => p.type === "flash")
+          .map((p, i) => {
             const params = p.aperture?.params || [];
             const type = p.aperture?.type || "C";
             let size = params[0] || 0.8;
@@ -385,7 +523,7 @@ const RenderLayer = ({ layerData }) => {
             if (type === "C" || type === "P") {
               return (
                 <circle
-                  key={i}
+                  key={`flash-${i}`}
                   cx={p.x}
                   cy={p.y}
                   r={size / 2}
@@ -398,7 +536,7 @@ const RenderLayer = ({ layerData }) => {
               const rx = type === "O" ? Math.min(w, h) / 2 : 0;
               return (
                 <rect
-                  key={i}
+                  key={`flash-${i}`}
                   x={p.x - w / 2}
                   y={p.y - h / 2}
                   width={w}
@@ -410,7 +548,7 @@ const RenderLayer = ({ layerData }) => {
             } else {
               return (
                 <circle
-                  key={i}
+                  key={`flash-${i}`}
                   cx={p.x}
                   cy={p.y}
                   r={size / 2}
@@ -418,24 +556,65 @@ const RenderLayer = ({ layerData }) => {
                 />
               );
             }
-          } else {
+          })}
+
+        {/* Render traces as a single path if possible or just normal paths */}
+        {data.paths
+          .filter((p) => p.type === "trace")
+          .map((p, i) => {
             const width = p.aperture?.params[0] || 0.2;
+            const outlinePath = traceToOutlinePath(p.d, width);
             return (
               <path
-                key={i}
-                d={p.d}
-                stroke="currentColor"
-                strokeWidth={width}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+                key={`trace-${i}`}
+                d={outlinePath}
+                fill="currentColor"
+                stroke="none"
+                fillRule="nonzero"
               />
             );
-          }
-        })}
+          })}
       </g>
     );
-  }, [layerData.color, layerData.opacity, layerData.data]);
+
+    if (inverted) {
+      // Use boardBounds if available, otherwise layer bounds
+      const b = boardBounds || data.bounds;
+      const pad = 1; // 1mm padding
+      const x = b.minX - pad;
+      const y = b.minY - pad;
+      const w = b.width + pad * 2;
+      const h = b.height + pad * 2;
+
+      return (
+        <g style={{ opacity }}>
+          <defs>
+            <mask id={`mask-${id}`}>
+              <rect x={x} y={y} width={w} height={h} fill="white" />
+              <g fill="black">{content}</g>
+            </mask>
+          </defs>
+          <rect
+            x={x}
+            y={y}
+            width={w}
+            height={h}
+            fill={color}
+            mask={`url(#mask-${id})`}
+          />
+        </g>
+      );
+    }
+
+    return (
+      <g
+        className="mix-blend-screen"
+        style={{ opacity: opacity, color: color }}
+      >
+        {content}
+      </g>
+    );
+  }, [layerData, boardBounds]);
 };
 
 const getLayerSide = (name) => {
@@ -490,11 +669,23 @@ const GerberView = ({
   onMouseUp,
   onMouseLeave,
   title,
+  onExport,
+  boardBounds,
 }) => {
   return (
     <div className="flex-1 relative border-r border-slate-800 last:border-r-0">
-      <div className="absolute top-2 left-2 text-xs font-bold text-slate-500 pointer-events-none z-10 bg-slate-900/50 px-2 rounded">
-        {title}
+      <div className="absolute top-2 left-2 right-2 flex justify-between items-start z-10 px-2 pointer-events-none">
+        <div className="text-xs font-bold text-slate-500 bg-slate-900/50 px-2 rounded">
+          {title}
+        </div>
+        <button
+          onClick={onExport}
+          className="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-slate-300 p-1.5 rounded border border-slate-600 shadow-sm transition-colors cursor-pointer flex items-center gap-1"
+          title={`Eksportuj ${title} do SVG`}
+        >
+          <Download size={14} />
+          <span className="text-[10px] font-medium">SVG</span>
+        </button>
       </div>
       <svg
         ref={svgRef}
@@ -523,6 +714,7 @@ const GerberView = ({
           </pattern>
         </defs>
         <rect
+          id="grid-background"
           x={viewBox.x - 1000}
           y={viewBox.y - 1000}
           width={viewBox.w + 2000}
@@ -533,7 +725,13 @@ const GerberView = ({
         <g transform="scale(1, -1)">
           {layers.map(
             (layer) =>
-              layer.visible && <RenderLayer key={layer.id} layerData={layer} />
+              layer.visible && (
+                <RenderLayer
+                  key={layer.id}
+                  layerData={layer}
+                  boardBounds={boardBounds}
+                />
+              )
           )}
         </g>
       </svg>
@@ -549,6 +747,45 @@ export default function App() {
   const svgBottomRef = useRef(null);
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+
+  const boardBounds = useMemo(() => {
+    const profile = layers.find(
+      (l) =>
+        l.name.toLowerCase().includes("profile") ||
+        l.name.toLowerCase().includes("outline") ||
+        l.name.toLowerCase().includes("edge") ||
+        l.name.toLowerCase().includes("gm1") ||
+        l.name.toLowerCase().includes("gko")
+    );
+    if (profile) return profile.data.bounds;
+
+    // Fallback: combined bounds of all layers
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    let hasContent = false;
+    layers.forEach((l) => {
+      const b = l.data.bounds;
+      if (b.minX !== Infinity) {
+        if (b.minX < minX) minX = b.minX;
+        if (b.minY < minY) minY = b.minY;
+        if (b.maxX > maxX) maxX = b.maxX;
+        if (b.maxY > maxY) maxY = b.maxY;
+        hasContent = true;
+      }
+    });
+    if (hasContent)
+      return {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        width: maxX - minX,
+        height: maxY - minY,
+      };
+    return null;
+  }, [layers]);
 
   const guessLayerStyle = (filename) => {
     const lower = filename.toLowerCase();
@@ -745,6 +982,24 @@ export default function App() {
     }
   };
 
+  const handleExport = (ref, name) => {
+    if (!ref.current) return;
+
+    const clone = ref.current.cloneNode(true);
+    const grid = clone.querySelector("#grid-background");
+    if (grid) grid.remove();
+
+    const svgData = new XMLSerializer().serializeToString(clone);
+    const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${name}.svg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="flex h-screen w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
       {/* SIDEBAR */}
@@ -789,6 +1044,13 @@ export default function App() {
                 onChangeOpacity={(id, o) =>
                   setLayers((l) =>
                     l.map((x) => (x.id === id ? { ...x, opacity: o } : x))
+                  )
+                }
+                onToggleInvert={(id) =>
+                  setLayers((l) =>
+                    l.map((x) =>
+                      x.id === id ? { ...x, inverted: !x.inverted } : x
+                    )
                   )
                 }
               />
@@ -899,6 +1161,8 @@ export default function App() {
             onMouseMove={(e) => handleMouseMove(e, svgTopRef)}
             onMouseUp={() => setIsPanning(false)}
             onMouseLeave={() => setIsPanning(false)}
+            onExport={() => handleExport(svgTopRef, "pcb_top")}
+            boardBounds={boardBounds}
           />
 
           <GerberView
@@ -914,6 +1178,8 @@ export default function App() {
             onMouseMove={(e) => handleMouseMove(e, svgBottomRef)}
             onMouseUp={() => setIsPanning(false)}
             onMouseLeave={() => setIsPanning(false)}
+            onExport={() => handleExport(svgBottomRef, "pcb_bottom")}
+            boardBounds={boardBounds}
           />
         </div>
 
