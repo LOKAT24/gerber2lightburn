@@ -127,6 +127,10 @@ class SimpleGerberParser {
     };
     this.isRegion = false;
     this.regionPath = "";
+    this.interpolationMode = "G01"; // G01, G02, G03
+    this.quadrantMode = "G74"; // G74 (Single), G75 (Multi)
+    this.macros = {};
+    this.parsingMacro = null;
   }
 
   toMM(val) {
@@ -156,14 +160,45 @@ class SimpleGerberParser {
     return this.toMM(num);
   }
 
+  // Helper to generate SVG Arc path command
+  getArcCommand(x1, y1, x2, y2, i, j, mode) {
+    // I, J are offsets from (x1, y1) to center
+    const cx = x1 + i;
+    const cy = y1 + j;
+    const radius = Math.sqrt(i * i + j * j);
+
+    // Calculate angles to determine large-arc-flag
+    const startAngle = Math.atan2(y1 - cy, x1 - cx);
+    const endAngle = Math.atan2(y2 - cy, x2 - cx);
+
+    let diff = endAngle - startAngle;
+
+    // Normalize diff based on direction
+    if (mode === "G02") {
+      // CW
+      if (diff > 0) diff -= 2 * Math.PI;
+    } else {
+      // G03 CCW
+      if (diff < 0) diff += 2 * Math.PI;
+    }
+
+    const largeArc = Math.abs(diff) > Math.PI ? 1 : 0;
+    const sweep = mode === "G02" ? 0 : 1; // 0 for CW, 1 for CCW in SVG (if Y-axis is not flipped)
+
+    return `A ${radius} ${radius} 0 ${largeArc} ${sweep} ${x2} ${y2}`;
+  }
+
   parse(gerberText) {
     const lines = gerberText.split(/[\n\r*]+/);
     this.paths = [];
     this.apertures = {};
+    this.macros = {};
+    this.parsingMacro = null;
     this.x = 0;
     this.y = 0;
     this.isRegion = false;
     this.regionPath = "";
+    this.interpolationMode = "G01";
     let currentPath = "";
 
     const flushPath = () => {
@@ -181,6 +216,22 @@ class SimpleGerberParser {
       line = line.trim();
       if (!line) continue;
 
+      // Macro Parsing
+      if (line.startsWith("%AM")) {
+        const name = line.substring(3);
+        this.macros[name] = [];
+        this.parsingMacro = name;
+        continue;
+      }
+      if (this.parsingMacro) {
+        if (line.includes("%")) {
+          this.parsingMacro = null;
+          continue;
+        }
+        this.macros[this.parsingMacro].push(line);
+        continue;
+      }
+
       if (line.startsWith("%MOIN")) this.units = "in";
       if (line.startsWith("%MOMM")) this.units = "mm";
 
@@ -190,6 +241,10 @@ class SimpleGerberParser {
           this.format.coordFormat.dec = parseInt(match[2], 10);
         }
       }
+
+      if (line.includes("G01")) this.interpolationMode = "G01";
+      if (line.includes("G02")) this.interpolationMode = "G02";
+      if (line.includes("G03")) this.interpolationMode = "G03";
 
       if (line === "G36") {
         flushPath();
@@ -227,9 +282,11 @@ class SimpleGerberParser {
         }
       }
 
-      if (line.match(/^(G|X|Y|D)/)) {
+      if (line.match(/^(G|X|Y|I|J|D)/)) {
         const xMatch = line.match(/X([-+]?\d+)/);
         const yMatch = line.match(/Y([-+]?\d+)/);
+        const iMatch = line.match(/I([-+]?\d+)/);
+        const jMatch = line.match(/J([-+]?\d+)/);
         const dMatch = line.match(/D(\d+)/);
 
         const newX = xMatch
@@ -239,12 +296,39 @@ class SimpleGerberParser {
           ? this.parseCoordinate(yMatch[0], this.format.coordFormat)
           : this.y;
 
+        const iVal = iMatch
+          ? this.parseCoordinate(iMatch[0], this.format.coordFormat)
+          : 0;
+        const jVal = jMatch
+          ? this.parseCoordinate(jMatch[0], this.format.coordFormat)
+          : 0;
+
         if (dMatch) {
           const op = dMatch[1];
           if (this.isRegion) {
             if (op === "01" || op === "02") {
-              const cmd = op === "02" ? "M" : "L";
-              this.regionPath += ` ${cmd} ${newX} ${newY}`;
+              if (op === "02") {
+                // Move
+                this.regionPath += ` M ${newX} ${newY}`;
+              } else {
+                // Draw
+                if (this.interpolationMode === "G01") {
+                  this.regionPath += ` L ${newX} ${newY}`;
+                } else {
+                  // Arc
+                  this.regionPath +=
+                    " " +
+                    this.getArcCommand(
+                      this.x,
+                      this.y,
+                      newX,
+                      newY,
+                      iVal,
+                      jVal,
+                      this.interpolationMode
+                    );
+                }
+              }
             }
           } else {
             if (op === "02") {
@@ -252,7 +336,22 @@ class SimpleGerberParser {
               currentPath = `M ${newX} ${newY}`;
             } else if (op === "01") {
               if (!currentPath) currentPath = `M ${this.x} ${this.y}`;
-              currentPath += ` L ${newX} ${newY}`;
+
+              if (this.interpolationMode === "G01") {
+                currentPath += ` L ${newX} ${newY}`;
+              } else {
+                currentPath +=
+                  " " +
+                  this.getArcCommand(
+                    this.x,
+                    this.y,
+                    newX,
+                    newY,
+                    iVal,
+                    jVal,
+                    this.interpolationMode
+                  );
+              }
             } else if (op === "03") {
               flushPath();
               this.paths.push({
@@ -264,10 +363,44 @@ class SimpleGerberParser {
             }
           }
         } else {
-          if (this.isRegion) {
-            this.regionPath += ` L ${newX} ${newY}`;
-          } else {
-            if (currentPath) currentPath += ` L ${newX} ${newY}`;
+          // No D code, assume previous D01 (draw) if we have coordinates
+          // But strictly Gerber requires D01/D02/D03.
+          // However, modal coordinates often imply D01 if inside a sequence.
+          // Let's assume D01 if we have movement and we are in a path.
+          if ((xMatch || yMatch) && (this.isRegion || currentPath)) {
+            if (this.isRegion) {
+              if (this.interpolationMode === "G01") {
+                this.regionPath += ` L ${newX} ${newY}`;
+              } else {
+                this.regionPath +=
+                  " " +
+                  this.getArcCommand(
+                    this.x,
+                    this.y,
+                    newX,
+                    newY,
+                    iVal,
+                    jVal,
+                    this.interpolationMode
+                  );
+              }
+            } else {
+              if (this.interpolationMode === "G01") {
+                currentPath += ` L ${newX} ${newY}`;
+              } else {
+                currentPath +=
+                  " " +
+                  this.getArcCommand(
+                    this.x,
+                    this.y,
+                    newX,
+                    newY,
+                    iVal,
+                    jVal,
+                    this.interpolationMode
+                  );
+              }
+            }
           }
         }
         this.x = newX;
@@ -441,11 +574,11 @@ const parseFile = async (file) => {
   return {
     name: file.name,
     paths: paths,
+    macros: parser.macros || {},
     bounds: { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY },
     units: "mm",
   };
 };
-
 const traceToOutlinePath = (d, width) => {
   const commands = d.trim().split(/\s+/);
   const points = [];
@@ -531,7 +664,7 @@ const RenderLayer = ({ layerData, boardBounds }) => {
             const type = p.aperture?.type || "C";
             let size = params[0] || 0.8;
 
-            if (type === "C" || type === "P") {
+            if (type === "C") {
               return (
                 <circle
                   key={`flash-${i}`}
@@ -556,7 +689,93 @@ const RenderLayer = ({ layerData, boardBounds }) => {
                   fill="currentColor"
                 />
               );
+            } else if (type === "P") {
+              // Polygon
+              const diameter = params[0] || size;
+              const vertices = params[1] || 6;
+              const rotation = params[2] || 0; // Rotation in degrees
+              const r = diameter / 2;
+
+              // Generate polygon points
+              const pts = [];
+              for (let v = 0; v < vertices; v++) {
+                const angle =
+                  (v * 2 * Math.PI) / vertices + (rotation * Math.PI) / 180;
+                pts.push(
+                  `${p.x + r * Math.cos(angle)},${p.y + r * Math.sin(angle)}`
+                );
+              }
+
+              return (
+                <polygon
+                  key={`flash-${i}`}
+                  points={pts.join(" ")}
+                  fill="currentColor"
+                />
+              );
             } else {
+              // Check for Macros
+              const macro = data.macros?.[type];
+              if (macro) {
+                return (
+                  <g key={`flash-${i}`} transform={`translate(${p.x}, ${p.y})`}>
+                    {macro.map((block, idx) => {
+                      const parts = block.split(",").map(parseFloat);
+                      const primType = parts[0];
+                      // 1: Circle, 20: Vector Line, 21: Center Rect, 4: Outline
+                      if (primType === 1) {
+                        // 1, exp, diam, x, y
+                        return (
+                          <circle
+                            key={idx}
+                            cx={parts[3]}
+                            cy={parts[4]}
+                            r={parts[2] / 2}
+                            fill="currentColor"
+                          />
+                        );
+                      }
+                      if (primType === 21) {
+                        // 21, exp, w, h, x, y, rot
+                        const w = parts[2];
+                        const h = parts[3];
+                        const x = parts[4];
+                        const y = parts[5];
+                        const rot = parts[6];
+                        return (
+                          <rect
+                            key={idx}
+                            x={x - w / 2}
+                            y={y - h / 2}
+                            width={w}
+                            height={h}
+                            transform={`rotate(${rot}, ${x}, ${y})`}
+                            fill="currentColor"
+                          />
+                        );
+                      }
+                      if (primType === 4) {
+                        // 4, exp, count, x1, y1, ...
+                        const count = parts[2];
+                        const pts = [];
+                        for (let k = 0; k < count; k++) {
+                          pts.push(`${parts[3 + k * 2]},${parts[4 + k * 2]}`);
+                        }
+                        return (
+                          <polygon
+                            key={idx}
+                            points={pts.join(" ")}
+                            fill="currentColor"
+                          />
+                        );
+                      }
+                      return null;
+                    })}
+                  </g>
+                );
+              }
+
+              // Fallback for unknown types - render as circle
               return (
                 <circle
                   key={`flash-${i}`}
@@ -631,41 +850,25 @@ const RenderLayer = ({ layerData, boardBounds }) => {
 const getLayerSide = (name) => {
   const lower = name.toLowerCase();
 
-  // Specific extensions for Top
+  // Regex for Top
   if (
-    lower.endsWith(".gtl") ||
-    lower.endsWith(".gto") ||
-    lower.endsWith(".gts") ||
-    lower.endsWith(".gtp") ||
-    lower.includes("f.cu") ||
-    lower.includes("f.silk") ||
-    lower.includes("f.mask") ||
-    lower.includes("f.paste")
+    lower.match(/\.gt[losp]/) ||
+    lower.match(/f[._-](cu|silk|mask|paste)/) ||
+    lower.includes("front") ||
+    lower.includes("top")
   ) {
     return "top";
   }
 
-  // Specific extensions for Bottom
+  // Regex for Bottom
   if (
-    lower.endsWith(".gbl") ||
-    lower.endsWith(".gbo") ||
-    lower.endsWith(".gbs") ||
-    lower.endsWith(".gbp") ||
-    lower.includes("b.cu") ||
-    lower.includes("b.silk") ||
-    lower.includes("b.mask") ||
-    lower.includes("b.paste")
+    lower.match(/\.gb[losp]/) ||
+    lower.match(/b[._-](cu|silk|mask|paste)/) ||
+    lower.includes("back") ||
+    lower.includes("bottom")
   ) {
     return "bottom";
   }
-
-  // Keywords
-  const isTop = lower.includes("top") || lower.includes("front");
-
-  const isBottom = lower.includes("bottom") || lower.includes("back");
-
-  if (isTop && !isBottom) return "top";
-  if (isBottom && !isTop) return "bottom";
 
   return "both";
 };
@@ -851,9 +1054,9 @@ export default function App() {
       // Bottom Silk slightly darker
       if (
         lower.includes("bottom") ||
-        lower.includes("b.") ||
         lower.includes("back") ||
-        lower.includes("gbo")
+        lower.endsWith(".gbo") ||
+        lower.match(/(^|[^a-z])b[._-]/)
       ) {
         return { color: "#bdc3c7", order: 80 };
       }
@@ -863,18 +1066,18 @@ export default function App() {
     // 6. Copper (Red/Blue)
     if (
       lower.includes("top") ||
-      lower.includes("f.cu") ||
-      lower.includes("gtl") ||
-      lower.includes("front")
+      lower.includes("front") ||
+      lower.match(/f[._-]cu/) ||
+      lower.endsWith(".gtl")
     ) {
       return { color: "#c0392b", opacity: 0.9, order: 10 };
     }
 
     if (
       lower.includes("bottom") ||
-      lower.includes("b.cu") ||
-      lower.includes("gbl") ||
-      lower.includes("back")
+      lower.includes("back") ||
+      lower.match(/b[._-]cu/) ||
+      lower.endsWith(".gbl")
     ) {
       return { color: "#2980b9", opacity: 0.9, order: 10 };
     }
