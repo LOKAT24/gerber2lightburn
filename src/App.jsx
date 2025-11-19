@@ -184,6 +184,13 @@ class SimpleGerberParser {
       if (line.startsWith("%MOIN")) this.units = "in";
       if (line.startsWith("%MOMM")) this.units = "mm";
 
+      if (line.startsWith("%FS")) {
+        const match = line.match(/X(\d)(\d)Y(\d)(\d)/);
+        if (match) {
+          this.format.coordFormat.dec = parseInt(match[2], 10);
+        }
+      }
+
       if (line === "G36") {
         flushPath();
         this.isRegion = true;
