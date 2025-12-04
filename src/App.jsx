@@ -1,4 +1,5 @@
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
+import paper from "paper";
 import {
   Upload,
   Layers,
@@ -12,6 +13,8 @@ import {
   Download,
   Maximize,
 } from "lucide-react";
+
+import { traceToOutlinePath, generateMergedPath } from "./utils/gerberUtils";
 
 /**
  * SIMPLE EXCELLON PARSER (DRILL FILES)
@@ -199,6 +202,9 @@ class SimpleGerberParser {
     this.isRegion = false;
     this.regionPath = "";
     this.interpolationMode = "G01";
+    this.coordinateMode = "G90";
+    this.quadrantMode = "G74";
+    this.polarity = "dark"; // Default to Dark (LPD)
     let currentPath = "";
 
     const flushPath = () => {
@@ -207,6 +213,7 @@ class SimpleGerberParser {
           d: currentPath,
           aperture: this.currentAperture,
           type: "trace",
+          polarity: this.polarity,
         });
         currentPath = "";
       }
@@ -215,6 +222,10 @@ class SimpleGerberParser {
     for (let line of lines) {
       line = line.trim();
       if (!line) continue;
+
+      // Polarity
+      if (line.startsWith("%LPD")) { this.polarity = "dark"; continue; }
+      if (line.startsWith("%LPC")) { this.polarity = "clear"; continue; }
 
       // Macro Parsing
       if (line.startsWith("%AM")) {
@@ -236,7 +247,7 @@ class SimpleGerberParser {
       if (line.startsWith("%MOMM")) this.units = "mm";
 
       if (line.startsWith("%FS")) {
-        const match = line.match(/X(\d)(\d)Y(\d)(\d)/);
+        const match = line.match(/X(\d)(\d)Y(\d)(\d)/i);
         if (match) {
           this.format.coordFormat.dec = parseInt(match[2], 10);
         }
@@ -245,6 +256,10 @@ class SimpleGerberParser {
       if (line.includes("G01")) this.interpolationMode = "G01";
       if (line.includes("G02")) this.interpolationMode = "G02";
       if (line.includes("G03")) this.interpolationMode = "G03";
+      if (line.includes("G90")) this.coordinateMode = "G90";
+      if (line.includes("G91")) this.coordinateMode = "G91";
+      if (line.includes("G74")) this.quadrantMode = "G74";
+      if (line.includes("G75")) this.quadrantMode = "G75";
 
       if (line === "G36") {
         flushPath();
@@ -255,7 +270,7 @@ class SimpleGerberParser {
       if (line === "G37") {
         this.isRegion = false;
         if (this.regionPath) {
-          this.paths.push({ d: this.regionPath + " Z", type: "region" });
+          this.paths.push({ d: this.regionPath + " Z", type: "region", polarity: this.polarity });
           this.regionPath = "";
         }
         continue;
@@ -289,12 +304,23 @@ class SimpleGerberParser {
         const jMatch = line.match(/J([-+]?\d+)/);
         const dMatch = line.match(/D(\d+)/);
 
-        const newX = xMatch
+        const valX = xMatch
           ? this.parseCoordinate(xMatch[0], this.format.coordFormat)
-          : this.x;
-        const newY = yMatch
+          : null;
+        const valY = yMatch
           ? this.parseCoordinate(yMatch[0], this.format.coordFormat)
-          : this.y;
+          : null;
+
+        let newX = this.x;
+        let newY = this.y;
+
+        if (this.coordinateMode === "G91") {
+          if (valX !== null) newX += valX;
+          if (valY !== null) newY += valY;
+        } else {
+          if (valX !== null) newX = valX;
+          if (valY !== null) newY = valY;
+        }
 
         const iVal = iMatch
           ? this.parseCoordinate(iMatch[0], this.format.coordFormat)
@@ -359,6 +385,7 @@ class SimpleGerberParser {
                 y: newY,
                 aperture: this.currentAperture,
                 type: "flash",
+                polarity: this.polarity,
               });
             }
           }
@@ -579,60 +606,6 @@ const parseFile = async (file) => {
     units: "mm",
   };
 };
-const traceToOutlinePath = (d, width) => {
-  const commands = d.trim().split(/\s+/);
-  const points = [];
-  for (let i = 0; i < commands.length; i++) {
-    const cmd = commands[i];
-    if (cmd === "M" || cmd === "L") {
-      const x = parseFloat(commands[i + 1]);
-      const y = parseFloat(commands[i + 2]);
-      points.push({ x, y });
-      i += 2;
-    }
-  }
-
-  if (points.length < 2) return "";
-
-  let path = "";
-  const r = width / 2;
-
-  // Add circles at all points (covers caps and joins)
-  points.forEach((p) => {
-    // Circle path: M cx cy m -r, 0 a r,r 0 1,1 (r*2),0 a r,r 0 1,1 -(r*2),0
-    // Uses sweep-flag 1 (clockwise) to match the winding of the rectangles
-    path += `M ${p.x} ${p.y} m -${r}, 0 a ${r},${r} 0 1,1 ${
-      r * 2
-    },0 a ${r},${r} 0 1,1 -${r * 2},0 `;
-  });
-
-  // Add rects for segments
-  for (let i = 0; i < points.length - 1; i++) {
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) continue;
-
-    const nx = (-dy / len) * r;
-    const ny = (dx / len) * r;
-
-    // 4 corners
-    const c1x = p1.x + nx;
-    const c1y = p1.y + ny;
-    const c2x = p1.x - nx;
-    const c2y = p1.y - ny;
-    const c3x = p2.x - nx;
-    const c3y = p2.y - ny;
-    const c4x = p2.x + nx;
-    const c4y = p2.y + ny;
-
-    path += `M ${c1x} ${c1y} L ${c2x} ${c2y} L ${c3x} ${c3y} L ${c4x} ${c4y} Z `;
-  }
-
-  return path;
-};
 
 const RenderLayer = ({ layerData, boardBounds }) => {
   return useMemo(() => {
@@ -651,7 +624,7 @@ const RenderLayer = ({ layerData, boardBounds }) => {
               d={regionD}
               fill="currentColor"
               stroke="none"
-              fillRule="evenodd"
+              fillRule="nonzero"
             />
           ) : null;
         })()}
@@ -1112,6 +1085,8 @@ export default function App() {
   const svgBottomRef = useRef(null);
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
 
   const boardBounds = useMemo(() => {
     const profile = layers.find(
@@ -1319,23 +1294,39 @@ export default function App() {
     }
   };
 
-  const handleExport = (ref, name) => {
-    if (!ref.current) return;
+  const handleExport = async (layersToExport, name) => {
+    setIsExporting(true);
+    setExportProgress(0);
 
-    const clone = ref.current.cloneNode(true);
-    const grid = clone.querySelector("#grid-background");
-    if (grid) grid.remove();
+    // Allow UI to update
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-    // Fix for units: explicitly set width and height in mm based on viewBox
-    const viewBoxAttr = clone.getAttribute("viewBox");
-    if (viewBoxAttr) {
-      const [, , w, h] = viewBoxAttr.split(" ").map(parseFloat);
-      clone.setAttribute("width", `${w}mm`);
-      clone.setAttribute("height", `${h}mm`);
+    // Create a temporary SVG string
+    // We use the current viewBox for dimensions
+    let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}" width="${viewBox.w}mm" height="${viewBox.h}mm">`;
+    svgContent += `<g transform="scale(1, -1)">`;
+
+    const visibleLayers = layersToExport.filter((l) => l.visible);
+    const total = visibleLayers.length;
+    let current = 0;
+
+    for (const layer of visibleLayers) {
+      // Generate path using Paper.js logic (synchronous but heavy)
+      const d = generateMergedPath(layer);
+      if (d) {
+        svgContent += `<path d="${d}" fill="${layer.color}" fill-rule="nonzero" />`;
+      }
+      current++;
+      setExportProgress(Math.round((current / total) * 100));
+      // Yield to UI
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    const svgData = new XMLSerializer().serializeToString(clone);
-    const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+    svgContent += `</g></svg>`;
+
+    const blob = new Blob([svgContent], {
+      type: "image/svg+xml;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1343,6 +1334,8 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+
+    setIsExporting(false);
   };
 
   const getFitViewBox = (layersList) => {
@@ -1460,6 +1453,22 @@ export default function App() {
 
       {/* MAIN CANVAS */}
       <div className="flex-1 relative flex flex-col h-full">
+        {isExporting && (
+          <div className="absolute inset-0 z-[100] bg-black/70 flex flex-col items-center justify-center backdrop-blur-sm">
+            <div className="bg-slate-800 p-6 rounded-xl shadow-2xl border border-slate-700 w-80 text-center">
+              <h3 className="text-lg font-bold text-white mb-4">
+                Generowanie SVG...
+              </h3>
+              <div className="w-full bg-slate-700 rounded-full h-4 mb-2 overflow-hidden">
+                <div
+                  className="bg-blue-500 h-full transition-all duration-300 ease-out"
+                  style={{ width: `${exportProgress}%` }}
+                />
+              </div>
+              <p className="text-sm text-slate-400">{exportProgress}%</p>
+            </div>
+          </div>
+        )}
         {/* TOOLBAR */}
         <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-slate-800/90 backdrop-blur-sm p-2 rounded-full shadow-lg flex items-center gap-2 border border-slate-700 z-20">
           <button
@@ -1553,7 +1562,15 @@ export default function App() {
             onMouseMove={(e) => handleMouseMove(e, svgTopRef)}
             onMouseUp={() => setIsPanning(false)}
             onMouseLeave={() => setIsPanning(false)}
-            onExport={() => handleExport(svgTopRef, "pcb_top")}
+            onExport={() =>
+              handleExport(
+                layers.filter((l) => {
+                  const side = getLayerSide(l.name);
+                  return side === "top" || side === "both";
+                }),
+                "pcb_top"
+              )
+            }
             boardBounds={boardBounds}
           />
 
@@ -1570,7 +1587,15 @@ export default function App() {
             onMouseMove={(e) => handleMouseMove(e, svgBottomRef)}
             onMouseUp={() => setIsPanning(false)}
             onMouseLeave={() => setIsPanning(false)}
-            onExport={() => handleExport(svgBottomRef, "pcb_bottom")}
+            onExport={() =>
+              handleExport(
+                layers.filter((l) => {
+                  const side = getLayerSide(l.name);
+                  return side === "bottom" || side === "both";
+                }),
+                "pcb_bottom"
+              )
+            }
             boardBounds={boardBounds}
           />
         </div>
