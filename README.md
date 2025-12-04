@@ -1,16 +1,51 @@
-# React + Vite
+# Gerber to LightBurn Converter
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Aplikacja webowa służąca do konwersji plików Gerber (PCB) na format SVG, zoptymalizowany pod kątem importu do oprogramowania LightBurn (do laserowego naświetlania/wypalania płytek PCB).
 
-Currently, two official plugins are available:
+## Funkcjonalności
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+*   **Podgląd plików Gerber i Drill:** Obsługa formatów RS-274X oraz Excellon.
+*   **Automatyczne rozpoznawanie warstw:** Inteligentne przypisywanie kolorów i kolejności warstw (Miedź, Soldermaska, Opisy, Otwory, Obrys).
+*   **Tryb Inverted (Negatyw):** Automatyczne generowanie negatywu dla warstw miedzi (niezbędne do fotochemicznej metody produkcji PCB lub ablacji laserowej).
+*   **Eksport do SVG:** Generowanie plików SVG gotowych do użycia w LightBurn.
+    *   Poprawne łączenie ścieżek (Union) za pomocą biblioteki ClipperLib.
+    *   Obsługa obrysów (Profile/Outline) jako linii cięcia (stroke) zamiast wypełnienia.
+    *   Możliwość lustrzanego odbicia (Mirror) dla dolnej warstwy.
+*   **Interfejs:**
+    *   Przeciągnij i upuść (Drag & Drop).
+    *   Przybliżanie i przesuwanie widoku (Pan & Zoom).
+    *   Zarządzanie widocznością i przezroczystością warstw.
 
-## React Compiler
+## Technologie
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+*   React 19
+*   Vite
+*   Paper.js (wstępne przetwarzanie geometrii)
+*   ClipperLib (operacje boolowskie na ścieżkach)
+*   Tailwind CSS (stylowanie)
 
-## Expanding the ESLint configuration
+## Uruchomienie projektu
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1.  Instalacja zależności:
+    ```bash
+    npm install
+    ```
+
+2.  Uruchomienie serwera deweloperskiego:
+    ```bash
+    npm run dev
+    ```
+
+3.  Budowanie wersji produkcyjnej:
+    ```bash
+    npm run build
+    ```
+
+4.  Deploy na GitHub Pages:
+    ```bash
+    npm run deploy
+    ```
+
+## Autor
+
+**Sagan** (2025)

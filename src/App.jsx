@@ -1694,6 +1694,7 @@ export default function App() {
             Pozycja: {Math.round(viewBox.x + viewBox.w / 2)},{" "}
             {Math.round(viewBox.y + viewBox.h / 2)}
           </span>
+          <span>Autor: Sagan (2025)</span>
           <span>Skala: {(100 / viewBox.w).toFixed(2)}x</span>
         </div>
       </div>

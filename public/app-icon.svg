@@ -1,0 +1,27 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="512" height="512" rx="102" fill="#2C3E50"/>
+    
+    <g stroke="#2ECC71" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M80 130 H140 L180 170 V240"/>
+        <path d="M80 380 H120 L160 340 V280"/>
+        <path d="M160 280 H200"/>
+        
+        <circle cx="80" cy="130" r="16" fill="#2ECC71" stroke="none"/>
+        <circle cx="180" cy="240" r="16" fill="#2ECC71" stroke="none"/>
+        <circle cx="80" cy="380" r="16" fill="#2ECC71" stroke="none"/>
+        <circle cx="200" cy="280" r="16" fill="#2ECC71" stroke="none"/>
+    </g>
+    
+    <path d="M240 256 H340 M300 216 L340 256 L300 296" stroke="#ECF0F1" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <g>
+        <path d="M390 100 L450 100 L435 160 L405 160 Z" fill="#E74C3C"/>
+        
+        <line x1="420" y1="160" x2="420" y2="360" stroke="#E74C3C" stroke-width="16" stroke-dasharray="40 16"/>
+        
+        <circle cx="420" cy="360" r="24" fill="#F1C40F"/>
+        <circle cx="420" cy="360" r="36" stroke="#F1C40F" stroke-width="8" opacity="0.6"/>
+        
+        <line x1="370" y1="380" x2="470" y2="380" stroke="#E67E22" stroke-width="20" stroke-linecap="round"/>
+    </g>
+</svg>
