@@ -12,9 +12,10 @@ import {
   Info,
   Download,
   Maximize,
+  FlipHorizontal,
 } from "lucide-react";
 
-import { traceToOutlinePath, generateMergedPath } from "./utils/gerberUtils";
+import { traceToOutlinePath, generateMergedPath, generateProfilePath } from "./utils/gerberUtils";
 
 /**
  * SIMPLE EXCELLON PARSER (DRILL FILES)
@@ -945,7 +946,7 @@ const RenderLayer = ({ layerData, boardBounds }) => {
           <defs>
             <mask id={`mask-${id}`}>
               <rect x={x} y={y} width={w} height={h} fill="white" />
-              <g fill="black">{content}</g>
+              <g fill="black" style={{ color: "black" }}>{content}</g>
             </mask>
           </defs>
           <rect
@@ -1009,15 +1010,51 @@ const GerberView = ({
   title,
   onExport,
   boardBounds,
+  allowMirror = false,
 }) => {
+  // Default to mirrored if allowed (for Bottom view)
+  const [mirrored, setMirrored] = useState(allowMirror);
+
+  const transform = useMemo(() => {
+    if (!mirrored) return "scale(1, -1)";
+    
+    // Calculate center X to flip around it
+    let centerX = 0;
+    if (boardBounds) {
+      centerX = (boardBounds.minX + boardBounds.maxX) / 2;
+    } else {
+      // Fallback if no bounds (e.g. use viewBox center)
+      centerX = viewBox.x + viewBox.w / 2;
+    }
+    
+    // Translate to center, flip X, translate back
+    // Combined with Y flip: scale(-1, -1) and translate(2*centerX, 0)
+    return `translate(${2 * centerX}, 0) scale(-1, -1)`;
+  }, [mirrored, boardBounds, viewBox]);
+
   return (
     <div className="flex-1 relative border-r border-slate-800 last:border-r-0">
       <div className="absolute top-2 left-2 right-2 flex justify-between items-start z-10 px-2 pointer-events-none">
-        <div className="text-xs font-bold text-slate-500 bg-slate-900/50 px-2 rounded">
-          {title}
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <div className="text-xs font-bold text-slate-500 bg-slate-900/50 px-2 rounded">
+            {title}
+          </div>
+          {allowMirror && (
+            <button
+              onClick={() => setMirrored(!mirrored)}
+              className={`p-1 rounded border transition-colors ${
+                mirrored
+                  ? "bg-blue-600 text-white border-blue-500"
+                  : "bg-slate-800 text-slate-400 border-slate-600 hover:bg-slate-700"
+              }`}
+              title="Odbij lustrzanie (Mirror)"
+            >
+              <FlipHorizontal size={14} />
+            </button>
+          )}
         </div>
         <button
-          onClick={onExport}
+          onClick={() => onExport(mirrored)}
           className="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-slate-300 p-1.5 rounded border border-slate-600 shadow-sm transition-colors cursor-pointer flex items-center gap-1"
           title={`Eksportuj ${title} do SVG`}
         >
@@ -1060,7 +1097,7 @@ const GerberView = ({
           fill="url(#grid)"
         />
 
-        <g transform="scale(1, -1)">
+        <g transform={transform}>
           {layers.map(
             (layer) =>
               layer.visible && (
@@ -1097,7 +1134,7 @@ export default function App() {
         l.name.toLowerCase().includes("gm1") ||
         l.name.toLowerCase().includes("gko")
     );
-    if (profile) return profile.data.bounds;
+    if (profile && profile.data && profile.data.bounds) return profile.data.bounds;
 
     // Fallback: combined bounds of all layers
     let minX = Infinity,
@@ -1106,6 +1143,7 @@ export default function App() {
       maxY = -Infinity;
     let hasContent = false;
     layers.forEach((l) => {
+      if (!l.data || !l.data.bounds) return;
       const b = l.data.bounds;
       if (b.minX !== Infinity) {
         if (b.minX < minX) minX = b.minX;
@@ -1130,17 +1168,17 @@ export default function App() {
   const guessLayerStyle = (filename) => {
     const lower = filename.toLowerCase();
 
-    // 1. Drills (White)
+    // 1. Drills (Blue)
     if (
       lower.includes(".drl") ||
       lower.includes(".xln") ||
       lower.includes("drill") ||
       lower.includes(".drd")
     ) {
-      return { color: "#ffffff", opacity: 0.9, order: 100 };
+      return { color: "#00a0ff", opacity: 0.9, order: 100 };
     }
 
-    // 2. Profile / Outline (Orange)
+    // 2. Profile / Outline (Dark Orange)
     if (
       lower.includes("profile") ||
       lower.includes("outline") ||
@@ -1148,45 +1186,36 @@ export default function App() {
       lower.includes("gm1") ||
       lower.includes("gko")
     ) {
-      return { color: "#e67e22", order: 90 };
+      return { color: "#c08000", order: 90 };
     }
 
-    // 3. Paste (Gold/Yellow)
+    // 3. Paste (Dark Yellow)
     if (
       lower.includes("paste") ||
       lower.includes("gtp") ||
       lower.includes("gbp") ||
       lower.includes("stencil")
     ) {
-      return { color: "#f1c40f", opacity: 0.8, order: 60 };
+      return { color: "#a0a000", opacity: 0.8, order: 60 };
     }
 
-    // 4. Soldermask (Green)
+    // 4. Soldermask (Dark Green)
     if (
       lower.includes("mask") ||
       lower.includes("gts") ||
       lower.includes("gbs")
     ) {
-      return { color: "#27ae60", opacity: 0.5, order: 50 };
+      return { color: "#00a000", opacity: 0.5, order: 50 };
     }
 
-    // 5. Silkscreen (White/Gray)
+    // 5. Silkscreen (Gray)
     if (
       lower.includes("silk") ||
       lower.includes("gto") ||
       lower.includes("gbo") ||
       lower.includes("legend")
     ) {
-      // Bottom Silk slightly darker
-      if (
-        lower.includes("bottom") ||
-        lower.includes("back") ||
-        lower.endsWith(".gbo") ||
-        lower.match(/(^|[^a-z])b[._-]/)
-      ) {
-        return { color: "#bdc3c7", order: 80 };
-      }
-      return { color: "#ecf0f1", order: 80 };
+      return { color: "#808080", order: 80 };
     }
 
     // 6. Copper (Red/Blue)
@@ -1196,7 +1225,7 @@ export default function App() {
       lower.match(/f[._-]cu/) ||
       lower.endsWith(".gtl")
     ) {
-      return { color: "#c0392b", opacity: 0.9, order: 10 };
+      return { color: "#a00000", opacity: 0.9, order: 10, inverted: true };
     }
 
     if (
@@ -1205,7 +1234,7 @@ export default function App() {
       lower.match(/b[._-]cu/) ||
       lower.endsWith(".gbl")
     ) {
-      return { color: "#2980b9", opacity: 0.9, order: 10 };
+      return { color: "#0000a0", opacity: 0.9, order: 10, inverted: true };
     }
 
     // Default fallback
@@ -1228,6 +1257,7 @@ export default function App() {
           opacity: style.opacity || 0.9,
           data: data,
           order: style.order,
+          inverted: style.inverted || false,
         });
       } catch (e) {
         console.error("Błąd parsowania:", file.name, e);
@@ -1282,40 +1312,79 @@ export default function App() {
     const svgEl = ref?.current;
     if (svgEl) {
       const { width, height } = svgEl.getBoundingClientRect();
-      const scaleX = viewBox.w / width;
-      const scaleY = viewBox.h / height;
+      
+      // Calculate the actual scale factor used by preserveAspectRatio="xMidYMid meet"
+      // "meet" scales the viewBox to fit within the viewport while maintaining aspect ratio.
+      // The scale factor (pixels per unit) is determined by the dimension that is "filled".
+      // We need the inverse: units per pixel.
+      // It is the maximum of (viewBox.w / width) and (viewBox.h / height).
+      const scale = Math.max(viewBox.w / width, viewBox.h / height);
 
       setViewBox((prev) => ({
         ...prev,
-        x: prev.x - dx * scaleX,
-        y: prev.y - dy * scaleY,
+        x: prev.x - dx * scale,
+        y: prev.y - dy * scale,
       }));
       setStartPan({ x: e.clientX, y: e.clientY });
     }
   };
 
-  const handleExport = async (layersToExport, name) => {
+  const handleExport = async (layersToExport, name, mirrored = false) => {
     setIsExporting(true);
     setExportProgress(0);
 
     // Allow UI to update
     await new Promise((resolve) => setTimeout(resolve, 50));
 
+    // Use the global boardBounds (calculated from Profile or all visible layers)
+    // This ensures inversion uses the correct board size
+    const exportBounds = boardBounds;
+
+    // Calculate transform for export
+    let transform = "scale(1, -1)";
+    if (mirrored) {
+        let centerX = 0;
+        if (exportBounds) {
+            centerX = (exportBounds.minX + exportBounds.maxX) / 2;
+        } else {
+            // Fallback if no bounds, use viewBox center
+            centerX = viewBox.x + viewBox.w / 2;
+        }
+        transform = `translate(${2 * centerX}, 0) scale(-1, -1)`;
+    }
+
     // Create a temporary SVG string
     // We use the current viewBox for dimensions
     let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}" width="${viewBox.w}mm" height="${viewBox.h}mm">`;
-    svgContent += `<g transform="scale(1, -1)">`;
+    svgContent += `<g transform="${transform}">`;
 
     const visibleLayers = layersToExport.filter((l) => l.visible);
     const total = visibleLayers.length;
     let current = 0;
 
     for (const layer of visibleLayers) {
-      // Generate path using Paper.js logic (synchronous but heavy)
-      const d = generateMergedPath(layer);
-      if (d) {
-        svgContent += `<path d="${d}" fill="${layer.color}" fill-rule="nonzero" />`;
+      const isProfile =
+        layer.name.toLowerCase().includes("profile") ||
+        layer.name.toLowerCase().includes("outline") ||
+        layer.name.toLowerCase().includes("edge") ||
+        layer.name.toLowerCase().includes("gm1") ||
+        layer.name.toLowerCase().includes("gko");
+
+      if (isProfile) {
+        // For profile layers, we want the centerline (stroke) without thickness
+        const d = generateProfilePath(layer);
+        if (d) {
+           // Use stroke instead of fill, thin line (0.1mm)
+           svgContent += `<path d="${d}" stroke="${layer.color}" stroke-width="0.1" fill="none" />`;
+        }
+      } else {
+        // Generate path using Paper.js logic (synchronous but heavy)
+        const d = generateMergedPath(layer, boardBounds);
+        if (d) {
+          svgContent += `<path d="${d}" fill="${layer.color}" fill-rule="nonzero" />`;
+        }
       }
+      
       current++;
       setExportProgress(Math.round((current / total) * 100));
       // Yield to UI
@@ -1381,16 +1450,53 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
       {/* SIDEBAR */}
-      <div className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col shadow-xl z-10">
-        <div className="p-4 border-b border-slate-800 bg-slate-900">
-          <h1 className="text-xl font-bold flex items-center gap-2 text-blue-400">
-            <Layers className="w-6 h-6" />
-            Gerber Viewer
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">Podgląd Gerber & Drill</p>
+      <div 
+        className={`w-72 bg-slate-900 border-r border-slate-800 flex flex-col shadow-xl z-10 ${
+          dragActive ? "bg-slate-800 ring-2 ring-blue-500 ring-inset" : ""
+        }`}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          setDragActive(false);
+        }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onDrop}
+      >
+        <div className="p-4 border-b border-slate-800 bg-slate-900 flex justify-between items-center">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2 text-blue-400">
+              <Layers className="w-6 h-6" />
+              Gerber Viewer
+            </h1>
+            <p className="text-xs text-slate-500 mt-1">Podgląd Gerber & Drill</p>
+          </div>
+          {layers.length > 0 && (
+            <button
+              onClick={() => {
+                if (confirm("Czy na pewno chcesz usunąć wszystkie warstwy?")) {
+                  setLayers([]);
+                }
+              }}
+              className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded transition-colors"
+              title="Wyczyść wszystkie warstwy"
+            >
+              <Trash2 size={20} />
+            </button>
+          )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-4 relative">
+          {dragActive && (
+            <div className="absolute inset-0 z-50 bg-blue-500/20 flex items-center justify-center backdrop-blur-sm rounded-lg pointer-events-none">
+              <div className="text-center p-4">
+                <Upload className="w-12 h-12 mx-auto mb-2 text-blue-200" />
+                <p className="text-blue-100 font-bold">Upuść pliki tutaj</p>
+              </div>
+            </div>
+          )}
           {layers.length === 0 ? (
             <div className="text-center py-10 text-slate-600">
               <Upload className="w-12 h-12 mx-auto mb-3 opacity-50" />
@@ -1461,7 +1567,7 @@ export default function App() {
               </h3>
               <div className="w-full bg-slate-700 rounded-full h-4 mb-2 overflow-hidden">
                 <div
-                  className="bg-blue-500 h-full transition-all duration-300 ease-out"
+                  className="bg-blue-500 h-full"
                   style={{ width: `${exportProgress}%` }}
                 />
               </div>
@@ -1518,29 +1624,9 @@ export default function App() {
 
         {/* SVG AREA */}
         <div
-          className={`flex-1 bg-slate-950 relative overflow-hidden flex flex-row ${
-            dragActive ? "bg-slate-900/50" : ""
-          }`}
-          onDragEnter={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-          }}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={onDrop}
+          className="flex-1 bg-slate-950 relative overflow-hidden flex flex-row"
         >
-          {dragActive && (
-            <div className="absolute inset-0 flex items-center justify-center z-50 bg-blue-500/20 border-4 border-blue-500 border-dashed m-4 rounded-2xl pointer-events-none">
-              <h2 className="text-2xl font-bold text-blue-100 drop-shadow-md">
-                Upuść pliki Gerber / Drill
-              </h2>
-            </div>
-          )}
-
-          {layers.length === 0 && !dragActive && (
+          {layers.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-700 select-none pointer-events-none">
               <div className="w-96 h-64 border-2 border-slate-800 rounded-lg flex items-center justify-center border-dashed mb-4">
                 <span className="text-6xl opacity-20">PCB</span>
@@ -1576,6 +1662,7 @@ export default function App() {
 
           <GerberView
             title="BOTTOM"
+            allowMirror={true}
             layers={layers.filter((l) => {
               const side = getLayerSide(l.name);
               return side === "bottom" || side === "both";
@@ -1587,13 +1674,14 @@ export default function App() {
             onMouseMove={(e) => handleMouseMove(e, svgBottomRef)}
             onMouseUp={() => setIsPanning(false)}
             onMouseLeave={() => setIsPanning(false)}
-            onExport={() =>
+            onExport={(isMirrored) =>
               handleExport(
                 layers.filter((l) => {
                   const side = getLayerSide(l.name);
                   return side === "bottom" || side === "both";
                 }),
-                "pcb_bottom"
+                "pcb_bottom",
+                isMirrored
               )
             }
             boardBounds={boardBounds}

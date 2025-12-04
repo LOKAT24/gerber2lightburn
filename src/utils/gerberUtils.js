@@ -55,9 +55,9 @@ export const traceToOutlinePath = (d, width) => {
   return path;
 };
 
-export const generateMergedPath = (layerData) => {
+export const generateMergedPath = (layerData, boardBounds = null) => {
   if (!layerData || !layerData.data) return "";
-  const { data } = layerData;
+  const { data, inverted } = layerData;
 
   // Setup Paper.js
   if (typeof document !== 'undefined') {
@@ -81,7 +81,8 @@ export const generateMergedPath = (layerData) => {
       const processPathItem = (pathItem) => {
           // Flatten to linear segments
           // We use a small tolerance relative to the scale
-          pathItem.flatten(0.02 * SCALE);
+          // Lower value = smoother curves (more segments)
+          pathItem.flatten(0.005 * SCALE);
           
           const path = [];
           if (pathItem.segments) {
@@ -146,7 +147,8 @@ export const generateMergedPath = (layerData) => {
           // Scale up for precision
           tempPath.scale(SCALE, [0, 0]);
           // Flatten curves to line segments.
-          tempPath.flatten(0.05 * SCALE);  
+          // Lower value = smoother curves
+          tempPath.flatten(0.01 * SCALE);  
           
           const points = tempPath.segments.map(s => ({x: s.point.x, y: s.point.y}));
           tempPath.remove();
@@ -513,5 +515,45 @@ export const generateMergedPath = (layerData) => {
   const finalSolution = new ClipperLib.Paths();
   clipper.Execute(ClipperLib.ClipType.ctUnion, finalSolution, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
   
+  // Handle Inversion
+  if (inverted && boardBounds) {
+    const boundsPath = new ClipperLib.Path();
+    
+    const minX = Math.round(boardBounds.minX * SCALE);
+    const minY = Math.round(boardBounds.minY * SCALE);
+    const maxX = Math.round(boardBounds.maxX * SCALE);
+    const maxY = Math.round(boardBounds.maxY * SCALE);
+
+    // Clockwise rectangle
+    boundsPath.push(new ClipperLib.IntPoint(minX, minY));
+    boundsPath.push(new ClipperLib.IntPoint(maxX, minY));
+    boundsPath.push(new ClipperLib.IntPoint(maxX, maxY));
+    boundsPath.push(new ClipperLib.IntPoint(minX, maxY));
+
+    const boundsPaths = new ClipperLib.Paths();
+    boundsPaths.push(boundsPath);
+
+    const invertedSolution = new ClipperLib.Paths();
+    const invertClipper = new ClipperLib.Clipper();
+    
+    // Subject: The Bounds (The "Board Material")
+    invertClipper.AddPaths(boundsPaths, ClipperLib.PolyType.ptSubject, true);
+    
+    // Clip: The Content (The "Copper to Remove" - which is what we have in finalSolution)
+    invertClipper.AddPaths(finalSolution, ClipperLib.PolyType.ptClip, true);
+    
+    // Execute Difference: Bounds - Content
+    invertClipper.Execute(ClipperLib.ClipType.ctDifference, invertedSolution, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+    
+    return clipperPathsToSVG(invertedSolution);
+  }
+
   return clipperPathsToSVG(finalSolution);
+};
+
+export const generateProfilePath = (layerData) => {
+  if (!layerData || !layerData.data || !layerData.data.paths) return "";
+  // Simply concatenate all path data strings. 
+  // This preserves the centerline without expanding to aperture width.
+  return layerData.data.paths.map(p => p.d).join(" ");
 };
